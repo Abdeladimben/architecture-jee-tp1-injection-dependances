@@ -1,0 +1,378 @@
+Activité Pratique N°1 - Injection des dépendances
+═══════════════════════════════════════════════════
+
+TP noté - Architecture JEE
+
+Partie 1 : Injection des dépendances basique
+══════════════════════════════════════════════
+
+Structure du projet
+───────────────────
+injection-dependances/
+├── src/ma/bdcc/
+│   ├── dao/IDao.java, DaoImpl.java, DaoImplV2.java, DaoImplV_SQL.java
+│   ├── metier/IMetier.java, MetierImpl.java
+│   └── presentation/Pres1_..., Pres2_..., Pres3_..., Pres4_...
+├── applicationContext.xml
+└── pom.xml
+
+Le principe c'est qu'on a une interface IDao avec plusieurs implémentations possibles. Au lieu de coder en dur quelle implémentation on utilise, on va "injecter" la dépendance de l'extérieur.
+
+1. Interface IDao
+─────────────────
+public interface IDao {
+    double getData();
+}
+
+2. Implémentations de IDao
+──────────────────────────
+// Version Base de données
+public class DaoImpl implements IDao {
+    public double getData() {
+        System.out.println("Version 1: Base de données");
+        return 25;
+    }
+}
+
+// Version Capteurs
+public class DaoImplV2 implements IDao {
+    public double getData() {
+        System.out.println("Version 2: Capteurs");
+        return 30;
+    }
+}
+
+// Version Web Service
+public class DaoImplV_SQL implements IDao {
+    public double getData() {
+        System.out.println("Version 3: Web Service");
+        return 40;
+    }
+}
+
+3. Interface IMetier
+────────────────────
+public interface IMetier {
+    double calcul();
+}
+
+4. Implémentation avec couplage faible
+───────────────────────────────────────
+public class MetierImpl implements IMetier {
+    private IDao dao; // Couplage faible - on dépend de l'interface, pas d'une classe concrète
+
+    public MetierImpl() {}
+    public MetierImpl(IDao dao) { this.dao = dao; }
+    public void setDao(IDao dao) { this.dao = dao; }
+
+    public double calcul() {
+        return dao.getData() * 10;
+    }
+}
+
+5a. Instanciation statique
+───────────────────────────
+// On crée tout nous-mêmes à la main. Pas ouf comme approche mais ça marche.
+public class Pres1_InstanciationStatique {
+    public static void main(String[] args) {
+        DaoImpl dao = new DaoImpl();
+        MetierImpl metier = new MetierImpl();
+        metier.setDao(dao); // Injection via setter
+        System.out.println("Résultat: " + metier.calcul());
+    }
+}
+
+5b. Instanciation dynamique (réflexion)
+─────────────────────────────────────────
+// On lit les noms de classes depuis un fichier, et on charge les classes dynamiquement.
+// Avantage : on peut changer le comportement sans recompiler.
+public class Pres2_InstanciationDynamique {
+    public static void main(String[] args) {
+        try {
+            Scanner scanner = new Scanner(new File("config.txt"));
+            String daoClassName = scanner.nextLine();
+            String metierClassName = scanner.nextLine();
+            scanner.close();
+
+            Class<?> daoClass = Class.forName(daoClassName);
+            IDao dao = (IDao) daoClass.getDeclaredConstructor().newInstance();
+
+            Class<?> metierClass = Class.forName(metierClassName);
+            IMetier metier = (IMetier) metierClass.getDeclaredConstructor().newInstance();
+
+            Method setter = metierClass.getMethod("setDao", IDao.class);
+            setter.invoke(metier, dao);
+
+            System.out.println("Résultat: " + metier.calcul());
+        } catch (Exception e) { e.printStackTrace(); }
+    }
+}
+
+Fichier config.txt :
+ma.bdcc.dao.DaoImpl
+ma.bdcc.metier.MetierImpl
+
+5c. Version Spring XML
+───────────────────────
+applicationContext.xml :
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+       http://www.springframework.org/schema/beans/spring-beans.xsd">
+    <bean id="dao" class="ma.bdcc.dao.DaoImpl"/>
+    <bean id="metier" class="ma.bdcc.metier.MetierImpl">
+        <property name="dao" ref="dao"/>
+    </bean>
+</beans>
+
+// Spring lit le XML et fait l'injection tout seul, c'est clean
+public class Pres3_VersionXml {
+    public static void main(String[] args) {
+        ApplicationContext context = new ClassPathXmlApplicationContext("applicationContext.xml");
+        IMetier metier = (IMetier) context.getBean("metier");
+        System.out.println("Résultat: " + metier.calcul());
+    }
+}
+
+5d. Version Spring Annotations
+───────────────────────────────
+// Là c'est encore plus simple, on met juste @Component et @Autowired
+@Component("dao")
+public class DaoImpl implements IDao {
+    public double getData() {
+        System.out.println("Version annotations");
+        return 25;
+    }
+}
+
+@Component("metier")
+public class MetierImpl implements IMetier {
+    @Autowired
+    private IDao dao;
+
+    public double calcul() {
+        return dao.getData() * 10;
+    }
+}
+
+public class Pres4_VersionAnnotations {
+    public static void main(String[] args) {
+        ApplicationContext context = new AnnotationConfigApplicationContext("ma.bdcc");
+        IMetier metier = context.getBean(IMetier.class);
+        System.out.println("Résultat: " + metier.calcul());
+    }
+}
+
+pom.xml (Spring Context)
+─────────────────────────
+<project xmlns="http://maven.apache.org/POM/4.0.0">...
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>6.0.11</version>
+        </dependency>
+    </dependencies>
+</project>
+
+Partie 2 : Mini Framework d'Injection des Dépendances
+═══════════════════════════════════════════════════════
+
+J'ai créé mon propre petit framework DI pour comprendre comment Spring fonctionne en interne.
+
+Structure :
+mini-framework-di/
+├── src/ma/bdcc/framework/
+│   ├── Context.java
+│   ├── annotation/Component.java, Autowired.java, Inject.java
+│   └── xml/BeanDefinition.java, XmlParser.java
+├── config.xml
+└── pom.xml
+
+Annotations
+───────────
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface Component {
+    String value() default "";
+}
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.FIELD, ElementType.CONSTRUCTOR, ElementType.METHOD})
+public @interface Autowired {}
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.FIELD)
+public @interface Inject {
+    String value() default "";
+}
+
+BeanDefinition pour le XML
+───────────────────────────
+public class BeanDefinition {
+    private String id;
+    private String className;
+    private String propertyName;
+    private String propertyRef;
+    // Getters et Setters...
+}
+
+XmlParser avec DOM
+───────────────────
+public class XmlParser {
+    public static Map<String, BeanDefinition> parse(String xmlFile) throws Exception {
+        Map<String, BeanDefinition> beans = new HashMap<>();
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        Document document = builder.parse(new File(xmlFile));
+        NodeList beanList = document.getElementsByTagName("bean");
+        for (int i = 0; i < beanList.getLength(); i++) {
+            Element beanElement = (Element) beanList.item(i);
+            BeanDefinition beanDef = new BeanDefinition();
+            beanDef.setId(beanElement.getAttribute("id"));
+            beanDef.setClassName(beanElement.getAttribute("class"));
+            NodeList properties = beanElement.getElementsByTagName("property");
+            if (properties.getLength() > 0) {
+                Element prop = (Element) properties.item(0);
+                beanDef.setPropertyName(prop.getAttribute("name"));
+                beanDef.setPropertyRef(prop.getAttribute("ref"));
+            }
+            beans.put(beanDef.getId(), beanDef);
+        }
+        return beans;
+    }
+}
+
+Le Context - le coeur du framework
+─────────────────────────────────────
+public class Context {
+    private Map<String, Object> beans = new HashMap<>();
+
+    // Constructeur XML
+    public Context(String xmlConfigFile) throws Exception {
+        Map<String, BeanDefinition> definitions = XmlParser.parse(xmlConfigFile);
+        for (BeanDefinition def : definitions.values()) {
+            Class<?> clazz = Class.forName(def.getClassName());
+            Object instance = clazz.getDeclaredConstructor().newInstance();
+            beans.put(def.getId(), instance);
+        }
+        // Injection des dépendances via setter
+        for (BeanDefinition def : definitions.values()) {
+            if (def.getPropertyRef() != null && !def.getPropertyRef().isEmpty()) {
+                Object target = beans.get(def.getId());
+                Object dependency = beans.get(def.getPropertyRef());
+                String setterName = "set" + Character.toUpperCase(def.getPropertyName().charAt(0)) + def.getPropertyName().substring(1);
+                Method setter = target.getClass().getMethod(setterName, dependency.getClass().getInterfaces()[0]);
+                setter.invoke(target, dependency);
+            }
+        }
+    }
+
+    // Constructeur par annotations (scanne le package)
+    public Context(String basePackage, boolean useAnnotations) throws Exception {
+        scanPackage(basePackage);
+        injectDependencies();
+    }
+
+    private void scanPackage(String basePackage) throws Exception {
+        String path = basePackage.replace('.', '/');
+        String fullPath = Thread.currentThread().getContextClassLoader().getResource(path).getFile();
+        scanDirectory(new File(fullPath), basePackage);
+    }
+
+    private void scanDirectory(File dir, String packageName) throws Exception {
+        for (File file : dir.listFiles()) {
+            if (file.isDirectory()) {
+                scanDirectory(file, packageName + "." + file.getName());
+            } else if (file.getName().endsWith(".class")) {
+                String className = packageName + "." + file.getName().replace(".class", "");
+                Class<?> clazz = Class.forName(className);
+                if (clazz.isAnnotationPresent(Component.class)) {
+                    Component component = clazz.getAnnotation(Component.class);
+                    String beanName = component.value().isEmpty()
+                        ? Character.toLowerCase(clazz.getSimpleName().charAt(0)) + clazz.getSimpleName().substring(1)
+                        : component.value();
+                    beans.put(beanName, clazz.getDeclaredConstructor().newInstance());
+                }
+            }
+        }
+    }
+
+    private void injectDependencies() throws Exception {
+        for (Object bean : beans.values()) {
+            Class<?> clazz = bean.getClass();
+            // Field injection
+            for (Field field : clazz.getDeclaredFields()) {
+                if (field.isAnnotationPresent(Autowired.class) || field.isAnnotationPresent(Inject.class)) {
+                    field.setAccessible(true);
+                    for (Object dep : beans.values()) {
+                        if (field.getType().isAssignableFrom(dep.getClass())) {
+                            field.set(bean, dep);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> T getBean(Class<T> clazz) {
+        for (Object bean : beans.values()) {
+            if (clazz.isAssignableFrom(bean.getClass())) return (T) bean;
+        }
+        return null;
+    }
+}
+
+Config XML pour le mini-framework
+─────────────────────────────────
+<?xml version="1.0" encoding="UTF-8"?>
+<beans>
+    <bean id="dao" class="ma.bdcc.dao.DaoImpl"/>
+    <bean id="metier" class="ma.bdcc.metier.MetierImpl">
+        <property name="dao" ref="dao"/>
+    </bean>
+</beans>
+
+Utilisation du Framework
+────────────────────────
+// Version XML
+public class FrameworkXmlTest {
+    public static void main(String[] args) throws Exception {
+        Context context = new Context("config.xml");
+        IMetier metier = context.getBean(IMetier.class);
+        System.out.println("Résultat (Framework XML): " + metier.calcul());
+    }
+}
+
+// Version Annotations
+public class FrameworkAnnotationTest {
+    public static void main(String[] args) throws Exception {
+        Context context = new Context("ma.bdcc", true);
+        IMetier metier = context.getBean(IMetier.class);
+        System.out.println("Résultat (Framework Annotations): " + metier.calcul());
+    }
+}
+
+Résultats attendus
+══════════════════
+1. Instanciation statique     → 250 (25 * 10)
+2. Instanciation dynamique    → 250
+3. Spring XML                 → 250
+4. Spring Annotations         → 250
+5. Mini Framework XML         → 250
+6. Mini Framework Annotations → 250
+
+Captures d'écran à prendre
+═══════════════════════════
+1. Console Pres1_InstanciationStatique
+2. Console Pres2_InstanciationDynamique
+3. Console Pres3_VersionXml
+4. Console Pres4_VersionAnnotations
+5. Arborescence du projet
+6. Console Framework XML
+7. Console Framework Annotations
+
+Vidéos : https://www.youtube.com/watch?v=vOLqabN-n2k
